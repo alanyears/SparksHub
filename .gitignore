@@ -3,6 +3,7 @@ target/
 *.class
 
 # IDE files
+Backend/target/
 .idea/
 *.iml
 *.ipr
@@ -49,6 +50,13 @@ nginx-1.18.0/*.pid
 
 # Trae IDE
 .trae/
+
+# Ignore everything in the root directory by default
+/*
+
+# But do not ignore the Backend directory
+!/Backend/
+!/.gitignore
 
 # Test resources
 src/test/java/com/hmdp/tokens.txt
