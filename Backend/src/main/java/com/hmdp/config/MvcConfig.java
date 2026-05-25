@@ -1,5 +1,5 @@
 package com.hmdp.config;
-// hahaha
+
 import com.hmdp.interceptor.LoginInterceptor;
 import com.hmdp.interceptor.RefreshTokenInterceptor;
 import org.springframework.context.annotation.Configuration;
@@ -32,5 +32,7 @@ public class MvcConfig implements WebMvcConfigurer {
         //token刷新的拦截器
         registry.addInterceptor(new RefreshTokenInterceptor(stringRedisTemplate))
                 .addPathPatterns("/**").order(0);
+        // 666
+        System.out.println("666");
     }
 }
