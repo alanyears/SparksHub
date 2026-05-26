@@ -92,4 +92,27 @@ public class BlogController {
         return blogService.quertBlogOfFollow(max,offset);
 
     }
+
+    /**
+     * AI智能总结
+     * @param id 博客ID
+     * @return 总结内容
+     */
+    @GetMapping("/ai-summary/{id}")
+    public Result getAiSummary(@PathVariable("id") Long id) {
+        return blogService.getAiSummary(id);
+    }
+
+    /**
+     * 提交用户对AI总结的反馈
+     * @param params 包含 blogId, isHelpful, summaryContent 的参数
+     * @return 结果
+     */
+    @PostMapping("/ai-summary/feedback")
+    public Result submitAiSummaryFeedback(@RequestBody java.util.Map<String, Object> params) {
+        Long blogId = Long.valueOf(params.get("blogId").toString());
+        Integer isHelpful = Integer.valueOf(params.get("isHelpful").toString());
+        String summaryContent = (String) params.get("summaryContent");
+        return blogService.submitAiSummaryFeedback(blogId, isHelpful, summaryContent);
+    }
 }

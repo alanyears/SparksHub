@@ -18,4 +18,8 @@ public interface IBlogService extends IService<Blog> {
     Result saveBlog(Blog blog);
 
     Result quertBlogOfFollow(Long max, Integer offset);
+
+    Result getAiSummary(Long id);
+
+    Result submitAiSummaryFeedback(Long blogId, Integer isHelpful, String summaryContent);
 }
