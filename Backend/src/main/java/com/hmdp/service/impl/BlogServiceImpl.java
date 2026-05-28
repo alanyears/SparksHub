@@ -58,6 +58,12 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     @Value("${ai.glm.model:glm-4-flash}")
     private String glmModel;
 
+    @Value("${ai.dify.api-url:http://localhost/v1/workflows/run}")
+    private String difyApiUrl;
+
+    @Value("${ai.dify.api-key:app-lSgOkO9nGkJOmTdAXH5mz666}")
+    private String difyApiKey;
+
     @Override
     public Result queryHotBlog(Integer current) {
         // 根据用户查询
@@ -243,7 +249,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         if (StrUtil.isNotBlank(cached)) {
             return Result.ok(cached);
         }
-        
+
         // 1. 获取评论数据（此处如果数据库没有数据，模拟20条数据塞给大模型以满足演示要求）
         String commentsJson = "[{\"id\":101,\"content\":\"这家店的味道真的很不错，服务态度也特别好，环境很干净，强烈推荐大家过来尝试一下！\"}," +
                 "{\"id\":102,\"content\":\"排队等了挺久的，上菜速度偏慢。菜品口味还可以，但还是有提升空间的，稍微有点失望。\"}," +
@@ -251,86 +257,65 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
                 "{\"id\":104,\"content\":\"买的券非常划算，分量很足吃得很饱，下次还会带朋友一起来吃的，五星好评没毛病！\"}," +
                 "{\"id\":105,\"content\":\"环境有点嘈杂，服务一般般。东西吃起来还行，没有特别惊艳的地方，算是一次普通的体验。\"}," +
                 "{\"id\":106,\"content\":\"太差劲了体验极差，可以说是难以下咽，完全对不起这个价格，大家千万不要被骗了！\"}," +
-                "{\"id\":107,\"content\":\"分量特别小根本吃不饱，且环境脏乱差。跟宣传的完全不一样，感觉自己了一个大大的坑。\"}," +
+                "{\"id\":107,\"content\":\"分量特别小根本吃不饱，且环境脏乱差。跟宣传的完全不一样，感觉自己踩了一个大大的坑。\"}," +
                 "{\"id\":108,\"content\":\"这是我吃过最好吃的一家，没想到这么便宜能吃到这么正宗的口味，太赞了！经常来这里吃。\"}]";
 
-        // 2. 组装 Prompt
-        String prompt = "你是一个专业客观的点评提炼专家。请基于以下原始用户评论JSON列表，进行核心总结，帮助用户快速了解。\n" +
-                "【要求】：\n" +
-                "1. 直接返回HTML标签字符串，不需要包含```html标签或任何额外说明废话。\n" +
-                "2. 提取评论中真实存在的具体信息（如菜品名称、环境细节、排队情况等），不要原样保留占位符。\n" +
-                "3. 核心重点信息（如招牌菜名、核心避雷点、代表性优点等）请使用 <strong> 加粗显示。\n" +
-                "4. 如果评论中未提及某些维度（例如没有提到具体菜品或地址），则直接省略该维度对应的 <li> 标签，也不要在结果中生造数据。\n" +
-                "5. 「在线评论」部分必须极度精简概括核心舆情，合并为1条，总字数不超过30个字，并在句末标出主要来源的 (评论ID: xxx)。\n" +
-                "\n【请遵循以下HTML结构格式提炼】：\n" +
-                "<p><strong>🍽️ 点评概括</strong></p>\n" +
-                "<ul>\n" +
-                "<li>店铺信息：(提取的真实信息，无则省略)</li>\n" +
-                "<li>推荐菜品：(提取的真实信息，无则省略)</li>\n" +
-                "<li>环境/服务：(提取的真实信息，无则省略)</li>\n" +
-                "<li>避雷指南：(提取的真实不足，无则省略)</li>\n" +
-                "</ul>\n" +
-                "<p><strong>💬 在线评论</strong></p>\n" +
-                "<ul>\n" +
-                "<li>(一句极简总结，不超过30字) (评论ID: xxx)</li>\n" +
-                "</ul>\n\n" +
-                "提供的评论数据如下：\n" + commentsJson;
-
-        // 3. 调用大模型API (方案A)
-        java.util.Map<String, Object> message = new java.util.HashMap<>();
-        message.put("role", "user");
-        message.put("content", prompt);
-        
+        // 2. 组装请求参数 (方案B: 调用 Dify 工作流)
         java.util.Map<String, Object> reqBody = new java.util.HashMap<>();
-        reqBody.put("model", glmModel); // 灵活切换不同模型
-        reqBody.put("messages", java.util.Arrays.asList(message));
+        java.util.Map<String, Object> inputs = new java.util.HashMap<>();
+        
+        // 基于Prompt工程，强约束AI 必须“基于提供的原始评论严格提取”，并且在槽点后面附带（来源评论ID 或 引用标识）
+        String constraint = "强约束AI 必须“基于提供的原始评论严格提取”，并且在槽点后面附带（来源评论ID 或 引用标识）。请以HTML格式返回结果，包含小标题。不要生成 markdown 外壳。";
+        inputs.put("comments", commentsJson);
+        inputs.put("commentsJson", commentsJson); // Dify 工作流中可能使用的是 commentsJson
+        inputs.put("constraint", constraint);
+        inputs.put("blogId", id);
+        // 如果 Dify 内部节点需要 prompt，可以用 inputs.prompt 传递
+        inputs.put("prompt", constraint + "\n 原始评论如下: \n" + commentsJson);
+        
+        reqBody.put("inputs", inputs);
+        reqBody.put("response_mode", "blocking");
+        String userId = UserHolder.getUser() != null ? String.valueOf(UserHolder.getUser().getId()) : "anonymous";
+        reqBody.put("user", "user_" + userId);
 
         String resultText;
         try {
-            // 真实调用方案，增加 timeout 限制，防止后端 HTTP 较小默认超时导致连接切断
-            String responseJsonStr = cn.hutool.http.HttpUtil.createPost(glmApiUrl)
-                   .header("Authorization", "Bearer " + glmApiKey)
+            // 3. 调用 Dify API
+            String responseJsonStr = cn.hutool.http.HttpUtil.createPost(difyApiUrl)
+                   .header("Authorization", "Bearer " + difyApiKey)
                    .header("Content-Type", "application/json")
                    .body(cn.hutool.json.JSONUtil.toJsonStr(reqBody))
-                   .timeout(40000) // 显式设置40秒超时
+                   .timeout(40000) 
                    .execute().body();
-                   
-            // 获取并解析生成的 JSON    
+
             cn.hutool.json.JSONObject responseObj = cn.hutool.json.JSONUtil.parseObj(responseJsonStr);
-            if (responseObj.containsKey("error")) {
-                String errorMsg = responseObj.getJSONObject("error").getStr("message");
-                System.err.println("大模型调用返回错误: " + responseJsonStr);
-                
-                // 针对错误做降级处理，以便您可以顺利测试前端功能
-                if (errorMsg != null) {
-                    resultText = "<p><strong>🍽️ 点评概括</strong></p>" +
-                            "<ul>" +
-                            "<li>环境/服务：环境<strong>干净整洁</strong>，但部分时段<strong>排队较久</strong>有些嘈杂</li>" +
-                            "<li>避雷指南：<strong>分量偏小</strong>且个别菜品<strong>不够新鲜</strong></li>" +
-                            "</ul>" +
-                            "<p><strong>💬 在线评论</strong></p>" +
-                            "<ul>" +
-                            "<li>味道正宗，性价比高，<strong>强烈推荐尝试</strong> (评论ID: 101, 104, 108)</li>" +
-                            "<li>部分菜品有待提升，<strong>等位时间长</strong> (评论ID: 102, 105)</li>" +
-                            "<li>体验极差，<strong>食材不新鲜、服务不好</strong> (评论ID: 103, 106, 107)</li>" +
-                            "</ul>" +
-                            "<br><span style='color:red;font-size:12px;'>（提示：因 GLM API 未配置或不正确，此处展示为系统自动降级的模拟数据。报错: " + errorMsg + "）</span>";
-                } else {
-                    return Result.fail("大模型API返回错误: " + errorMsg);
-                }
+            if (responseObj.containsKey("code") || responseObj.containsKey("error") || !responseObj.containsKey("data")) {
+                System.err.println("Dify调用错误: " + responseJsonStr);
+                // 模拟降级数据用于测试
+                resultText = "<p><strong>🍔 点评概括</strong></p>" +
+                        "<ul>" +
+                        "<li>环境/服务：环境<strong>干净整洁</strong>，但部分时段<strong>排队较久</strong>有些嘈杂</li>" +
+                        "<li>避雷指南：<strong>分量偏小</strong>且个别菜品<strong>不够新鲜</strong> (评论ID: 103, 107)</li>" +
+                        "</ul>" +
+                        "<p><strong>💬 在线评论</strong></p>" +
+                        "<ul>" +
+                        "<li>味道正宗，性价比高，<strong>强烈推荐尝试</strong> (评论ID: 101, 104, 108)</li>" +
+                        "</ul>" +
+                        "<br><span style='color:red;font-size:12px;'>（提示：由于 Dify API 未正确配置或网络问题，此处展示模拟数据）</span>";
             } else {
-                cn.hutool.json.JSONArray choices = responseObj.getJSONArray("choices");
-                if (choices == null || choices.isEmpty()) {
-                    System.err.println("大模型调用未返回 choices 内容: " + responseJsonStr);
-                    return Result.fail("未生成总结内容");
+                cn.hutool.json.JSONObject data = responseObj.getJSONObject("data");
+                cn.hutool.json.JSONObject outputs = data.getJSONObject("outputs");
+                
+                // Dify 的 outputs key 是在工作流配置的，尝试获取常见的值
+                if (outputs.containsKey("result")) {
+                    resultText = outputs.getStr("result");
+                } else if (outputs.containsKey("text")) {
+                    resultText = outputs.getStr("text");
+                } else {
+                    // 取第一个 output 字段
+                    resultText = outputs.values().iterator().next().toString();
                 }
-                
-                resultText = choices
-                        .getJSONObject(0)
-                        .getJSONObject("message")
-                        .getStr("content");
-                
-                // 去除可能携带的 ```html 和 ``` 的 Markdown 外壳
+
                 if (resultText.startsWith("```html")) {
                     resultText = resultText.substring(7);
                 }
@@ -343,12 +328,15 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
                 resultText = resultText.trim();
             }
 
-            // 4. 将结果缓存入 Redis，过期时间可设为24小时
+            // 附带免责声明
+            resultText += "<br><span style=\"font-size:12px;color:#999;\">免责声明：由 AI 基于用户评论生成，仅供参考</span>";
+
+            // 4. 将结果缓存入 Redis
             stringRedisTemplate.opsForValue().set(cacheKey, resultText, 24, java.util.concurrent.TimeUnit.HOURS);
             return Result.ok(resultText);
         } catch (Exception e) {
             e.printStackTrace();
-            return Result.fail("大模型API调用失败");
+            return Result.fail("Dify API调用失败");
         }
     }
 
