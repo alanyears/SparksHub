@@ -115,4 +115,12 @@ public class BlogController {
         String summaryContent = (String) params.get("summaryContent");
         return blogService.submitAiSummaryFeedback(blogId, isHelpful, summaryContent);
     }
+
+    /**
+     * 批量导出 SFT 偏好数据（JSON：total + records）
+     */
+    @GetMapping("/ai-summary/feedback/export")
+    public Result exportAiSummaryFeedback() {
+        return blogService.exportAiSummaryFeedback();
+    }
 }

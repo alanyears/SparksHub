@@ -8,12 +8,17 @@ import com.hmdp.dto.Result;
 import com.hmdp.dto.ScrollResult;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.Blog;
+import com.hmdp.entity.BlogComments;
 import com.hmdp.entity.Follow;
+import com.hmdp.entity.Shop;
 import com.hmdp.entity.User;
 import com.hmdp.mapper.BlogMapper;
+import com.hmdp.service.IAiSummaryFeedbackService;
+import com.hmdp.service.IBlogCommentsService;
 import com.hmdp.service.IBlogService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.service.IFollowService;
+import com.hmdp.service.IShopService;
 import com.hmdp.service.IUserService;
 import com.hmdp.utils.RedisConstants;
 import com.hmdp.utils.SystemConstants;
@@ -48,6 +53,17 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
+
+    @Resource
+    private IBlogCommentsService blogCommentsService;
+
+    @Resource
+    private IAiSummaryFeedbackService aiSummaryFeedbackService;
+
+    @Resource
+    private IShopService shopService;
+
+    private static final String AI_SUMMARY_CACHE_KEY = "blog:ai:summary:v2:";
 
     @Value("${ai.glm.api-url:https://open.bigmodel.cn/api/paas/v4/chat/completions}")
     private String glmApiUrl;
@@ -243,36 +259,42 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
     @Override
     public Result getAiSummary(Long id) {
-        // 0. 读取 Redis 缓存
-        String cacheKey = "blog:ai:summary:" + id;
+        String cacheKey = AI_SUMMARY_CACHE_KEY + id;
         String cached = stringRedisTemplate.opsForValue().get(cacheKey);
         if (StrUtil.isNotBlank(cached)) {
             return Result.ok(cached);
         }
 
-        // 1. 获取评论数据（此处如果数据库没有数据，模拟20条数据塞给大模型以满足演示要求）
-        String commentsJson = "[{\"id\":101,\"content\":\"这家店的味道真的很不错，服务态度也特别好，环境很干净，强烈推荐大家过来尝试一下！\"}," +
-                "{\"id\":102,\"content\":\"排队等了挺久的，上菜速度偏慢。菜品口味还可以，但还是有提升空间的，稍微有点失望。\"}," +
-                "{\"id\":103,\"content\":\"真的避雷！菜都不新鲜，吃起来味道也是怪怪的，服务员爱理不理，这辈子不会再来第二回了！\"}," +
-                "{\"id\":104,\"content\":\"买的券非常划算，分量很足吃得很饱，下次还会带朋友一起来吃的，五星好评没毛病！\"}," +
-                "{\"id\":105,\"content\":\"环境有点嘈杂，服务一般般。东西吃起来还行，没有特别惊艳的地方，算是一次普通的体验。\"}," +
-                "{\"id\":106,\"content\":\"太差劲了体验极差，可以说是难以下咽，完全对不起这个价格，大家千万不要被骗了！\"}," +
-                "{\"id\":107,\"content\":\"分量特别小根本吃不饱，且环境脏乱差。跟宣传的完全不一样，感觉自己踩了一个大大的坑。\"}," +
-                "{\"id\":108,\"content\":\"这是我吃过最好吃的一家，没想到这么便宜能吃到这么正宗的口味，太赞了！经常来这里吃。\"}]";
+        Blog blog = getById(id);
+        if (blog == null) {
+            return Result.fail("博客不存在");
+        }
+        List<BlogComments> commentList = listBlogComments(id);
+        
+        // 添加调试日志
+        System.out.println("=== AI总结调试信息 ===");
+        System.out.println("博客ID: " + id);
+        System.out.println("博客标题: " + blog.getTitle());
+        System.out.println("店铺ID: " + blog.getShopId());
+        System.out.println("评论数量: " + commentList.size());
+        System.out.println("评论列表: " + commentList);
+        
+        String commentsJson = buildAiContextJson(blog, commentList);
+        String shopName = resolveShopName(blog.getShopId());
+        int commentCount = commentList.size();
+        
+        System.out.println("传递给Dify的JSON: " + commentsJson);
+        System.out.println("店铺名称: " + shopName);
+        System.out.println("=====================");
 
-        // 2. 组装请求参数 (方案B: 调用 Dify 工作流)
         java.util.Map<String, Object> reqBody = new java.util.HashMap<>();
         java.util.Map<String, Object> inputs = new java.util.HashMap<>();
-        
-        // 基于Prompt工程，强约束AI 必须“基于提供的原始评论严格提取”，并且在槽点后面附带（来源评论ID 或 引用标识）
-        String constraint = "强约束AI 必须“基于提供的原始评论严格提取”，并且在槽点后面附带（来源评论ID 或 引用标识）。请以HTML格式返回结果，包含小标题。不要生成 markdown 外壳。";
-        inputs.put("comments", commentsJson);
-        inputs.put("commentsJson", commentsJson); // Dify 工作流中可能使用的是 commentsJson
-        inputs.put("constraint", constraint);
+        // 与 Dify「开始」节点变量名一致：blogId、commentsJson、shopName、commentCount
         inputs.put("blogId", id);
-        // 如果 Dify 内部节点需要 prompt，可以用 inputs.prompt 传递
-        inputs.put("prompt", constraint + "\n 原始评论如下: \n" + commentsJson);
-        
+        inputs.put("commentsJson", commentsJson);
+        inputs.put("shopName", shopName);
+        inputs.put("commentCount", commentCount);
+
         reqBody.put("inputs", inputs);
         reqBody.put("response_mode", "blocking");
         String userId = UserHolder.getUser() != null ? String.valueOf(UserHolder.getUser().getId()) : "anonymous";
@@ -291,17 +313,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
             cn.hutool.json.JSONObject responseObj = cn.hutool.json.JSONUtil.parseObj(responseJsonStr);
             if (responseObj.containsKey("code") || responseObj.containsKey("error") || !responseObj.containsKey("data")) {
                 System.err.println("Dify调用错误: " + responseJsonStr);
-                // 模拟降级数据用于测试
-                resultText = "<p><strong>🍔 点评概括</strong></p>" +
-                        "<ul>" +
-                        "<li>环境/服务：环境<strong>干净整洁</strong>，但部分时段<strong>排队较久</strong>有些嘈杂</li>" +
-                        "<li>避雷指南：<strong>分量偏小</strong>且个别菜品<strong>不够新鲜</strong> (评论ID: 103, 107)</li>" +
-                        "</ul>" +
-                        "<p><strong>💬 在线评论</strong></p>" +
-                        "<ul>" +
-                        "<li>味道正宗，性价比高，<strong>强烈推荐尝试</strong> (评论ID: 101, 104, 108)</li>" +
-                        "</ul>" +
-                        "<br><span style='color:red;font-size:12px;'>（提示：由于 Dify API 未正确配置或网络问题，此处展示模拟数据）</span>";
+                resultText = buildFallbackSummaryHtml(blog, commentsJson);
             } else {
                 cn.hutool.json.JSONObject data = responseObj.getJSONObject("data");
                 cn.hutool.json.JSONObject outputs = data.getJSONObject("outputs");
@@ -328,9 +340,6 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
                 resultText = resultText.trim();
             }
 
-            // 附带免责声明
-            resultText += "<br><span style=\"font-size:12px;color:#999;\">免责声明：由 AI 基于用户评论生成，仅供参考</span>";
-
             // 4. 将结果缓存入 Redis
             stringRedisTemplate.opsForValue().set(cacheKey, resultText, 24, java.util.concurrent.TimeUnit.HOURS);
             return Result.ok(resultText);
@@ -343,16 +352,85 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     @Override
     public Result submitAiSummaryFeedback(Long blogId, Integer isHelpful, String summaryContent) {
         Long userId = UserHolder.getUser() != null ? UserHolder.getUser().getId() : 0L;
-        // 把高质量人类评价偏好数据落库或打印日志（收集SFT数据）
-        // TbAiSummaryFeedback feedback = new TbAiSummaryFeedback(blogId, userId, summaryContent, isHelpful);
-        // feedbackService.save(feedback);
-        System.out.println("====== [收集到 SFT 训练数据] ======");
-        System.out.println("Blog ID: " + blogId);
-        System.out.println("User ID: " + userId);
-        System.out.println("Is Helpful: " + (isHelpful == 1 ? "👍" : "👎"));
-        System.out.println("Summary Content: " + summaryContent);
-        System.out.println("===================================");
-        
+        aiSummaryFeedbackService.saveFeedback(blogId, userId, isHelpful, summaryContent);
         return Result.ok();
+    }
+
+    @Override
+    public Result exportAiSummaryFeedback() {
+        return aiSummaryFeedbackService.exportForSft();
+    }
+
+    private List<BlogComments> listBlogComments(Long blogId) {
+        return blogCommentsService.query()
+                .eq("blog_id", blogId)
+                .apply("(status IS NULL OR status = 0)")
+                .orderByDesc("create_time")
+                .last("LIMIT 500")
+                .list();
+    }
+
+    private String resolveShopName(Long shopId) {
+        if (shopId == null) {
+            return "";
+        }
+        Shop shop = shopService.getById(shopId);
+        return shop != null ? StrUtil.blankToDefault(shop.getName(), "") : "";
+    }
+
+    /** 合并点评笔记与评论，供 Dify commentsJson 单字段解析 */
+    private String buildAiContextJson(Blog blog, List<BlogComments> commentList) {
+        cn.hutool.json.JSONObject root = new cn.hutool.json.JSONObject();
+        cn.hutool.json.JSONObject blogNote = new cn.hutool.json.JSONObject();
+        blogNote.set("id", blog.getId());
+        blogNote.set("title", blog.getTitle());
+        blogNote.set("content", stripHtml(blog.getContent()));
+        root.set("blogNote", blogNote);
+        cn.hutool.json.JSONArray comments = new cn.hutool.json.JSONArray();
+        for (BlogComments c : commentList) {
+            cn.hutool.json.JSONObject item = new cn.hutool.json.JSONObject();
+            item.set("id", c.getId());
+            item.set("content", c.getContent());
+            comments.add(item);
+        }
+        root.set("comments", comments);
+        return root.toString();
+    }
+
+    private String stripHtml(String html) {
+        if (StrUtil.isBlank(html)) {
+            return "";
+        }
+        return html.replaceAll("<[^>]+>", " ").replaceAll("\\s+", " ").trim();
+    }
+
+    private String buildFallbackSummaryHtml(Blog blog, String commentsJson) {
+        StringBuilder sb = new StringBuilder();
+        cn.hutool.json.JSONObject root = cn.hutool.json.JSONUtil.parseObj(commentsJson);
+        cn.hutool.json.JSONObject blogNote = root.getJSONObject("blogNote");
+        String title = blogNote != null ? blogNote.getStr("title") : blog.getTitle();
+        String content = blogNote != null ? blogNote.getStr("content") : stripHtml(blog.getContent());
+        sb.append("<p><strong>点评笔记</strong></p><p>")
+                .append(StrUtil.blankToDefault(title, "无标题"))
+                .append("</p><p>")
+                .append(StrUtil.sub(content, 0, 500))
+                .append(content != null && content.length() > 500 ? "…" : "")
+                .append("</p>");
+        cn.hutool.json.JSONArray comments = root.getJSONArray("comments");
+        sb.append("<p><strong>在线评论</strong></p>");
+        if (comments == null || comments.isEmpty()) {
+            sb.append("<p>暂无在线评论。</p>");
+        } else {
+            sb.append("<ul>");
+            int limit = Math.min(comments.size(), 8);
+            for (int i = 0; i < limit; i++) {
+                cn.hutool.json.JSONObject c = comments.getJSONObject(i);
+                sb.append("<li>").append(c.getStr("content"))
+                        .append(" (评论ID: ").append(c.getLong("id")).append(")</li>");
+            }
+            sb.append("</ul>");
+        }
+        sb.append("<br><span style='color:red;font-size:12px;'>（Dify 未就绪，以上为数据库原文摘要）</span>");
+        return sb.toString();
     }
 }

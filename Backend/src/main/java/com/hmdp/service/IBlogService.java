@@ -22,4 +22,6 @@ public interface IBlogService extends IService<Blog> {
     Result getAiSummary(Long id);
 
     Result submitAiSummaryFeedback(Long blogId, Integer isHelpful, String summaryContent);
+
+    Result exportAiSummaryFeedback();
 }

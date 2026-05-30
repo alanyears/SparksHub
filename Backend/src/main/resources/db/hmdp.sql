@@ -1281,4 +1281,19 @@ CREATE TABLE `tb_voucher_order`  (
 -- Records of tb_voucher_order
 -- ----------------------------
 
+-- ----------------------------
+-- Table structure for tb_ai_summary_feedback
+-- ----------------------------
+DROP TABLE IF EXISTS `tb_ai_summary_feedback`;
+CREATE TABLE `tb_ai_summary_feedback`  (
+  `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
+  `blog_id` bigint(20) UNSIGNED NOT NULL COMMENT '博客id',
+  `user_id` bigint(20) UNSIGNED NOT NULL DEFAULT 0 COMMENT '用户id，0为匿名访客',
+  `is_helpful` tinyint(1) UNSIGNED NOT NULL COMMENT '1有帮助(赞)，0无帮助(踩)',
+  `summary_content` text CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '被评价的AI总结原文',
+  `create_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (`id`) USING BTREE,
+  INDEX `idx_blog_id` (`blog_id`) USING BTREE
+) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = 'AI总结人类反馈(SFT偏好数据)' ROW_FORMAT = Compact;
+
 SET FOREIGN_KEY_CHECKS = 1;
