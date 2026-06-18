@@ -59,6 +59,7 @@ nginx-1.18.0/*.pid
 # But do not ignore the Backend directory
 !/Backend/
 !/.gitignore
+!/README.md
 
 # Test resources
 src/test/java/com/hmdp/tokens.txt
