@@ -12,7 +12,7 @@
 ---
 
 ## 📖 项目声明
-- 该项目Demo仅作为**个人产品理论和技术实践（2026.5）**。
+- 该项目Demo**仅作为个人产品理论和技术实践（2026.5）**。
 - **视频演示**：https://www.bilibili.com/video/BV1NKjN6aEHL/?spm_id_from=333.1387.homepage.video_card.click&vd_source=fca15a1c9bfc53c1217a943d1fea2c3c
 - **本项目仅用于学习演示目的，不公开全部代码，仅提供视频演示。**
 
